@@ -98,6 +98,12 @@ def decode_coordinate(coord: str) -> DecodeResult:
     """
     Calls the backend to resolve the coordinate.
     """
+    if len(coord) > 100 and coord.isdigit():
+        return {
+            "status": "error",
+            "detail": "You pasted the Prime Product (Math). Please paste the Coordinate (e.g. PL-Conv...)"
+        }
+
     try:
         # 1. VISUALIZATION: Fake "Math" processing delay
         with st.status("Establishing Coherence Handshake...", expanded=True) as status:
@@ -109,38 +115,38 @@ def decode_coordinate(coord: str) -> DecodeResult:
             time.sleep(0.3)
             
             # 2. REAL API CALL
-            # Use the /web4/decode endpoint we discussed
-            # payload = {"coordinate": coord}
-            # response = requests.post(f"{API_BASE}/api/web4/decode", json=payload)
-            
-            # MOCK RESPONSE (For the Demo Video until Endpoint is public)
-            # This simulates what the Backend Agent described in the logs
-            if "PL-Conv" in coord:
+            response = requests.post(
+                f"{API_BASE}/web4/decode",
+                json={"coordinate": coord},
+                headers={"Content-Type": "application/json"}
+            )
+
+            body = response.json()
+            payload = body.get("data") or body.get("result") or body  # Handle nested payloads
+
+            if response.ok and body.get("status") == "success":
                 status.update(label="Handshake Verified", state="complete")
+                meta = payload.get("meta")
+                content = payload.get("content")
+
+                if not meta or not content:
+                    return {"status": "error", "detail": "Resolver returned an incomplete payload."}
+
                 return {
                     "status": "success",
-                    "meta": {
-                        "namespace": "Prime Ledger (PL)",
-                        "type": "Conversation Thread",
-                        "coherence": 0.998,
-                        "mediator": "137 (Law)",
-                        "timestamp": "2023-Q4"
-                    },
-                    "primes": [23, 79, 461],
-                    "content": {
-                        "summary": "Conversation regarding the unpacking mechanics of Prime Ledgers.",
-                        "claims": [
-                            "Knowledge is accessed, not exposed.",
-                            "Awareness Love(s) Life (Eq. 9)",
-                            "Dual-substrate flow: Q_p (discrete) -> R (continuous)"
-                        ],
-                        "context": "Ties to Berigny's 'Education of Nature' and the rejection of superstition in favor of rational structure."
-                    }
+                    "meta": meta,
+                    "primes": payload.get("primes", []),
+                    "content": content
                 }
-            else:
-                status.update(label="Coherence Failed", state="error")
-                return {"status": "error", "detail": "Invalid Coordinate Format or Ledger Mismatch"}
-                
+
+            detail = payload.get("detail") or payload.get("error") or response.text
+            status.update(label="Coherence Failed", state="error")
+            return {"status": "error", "detail": detail}
+
+    except requests.exceptions.RequestException as e:
+        return {"status": "error", "detail": f"Network error: {e}"}
+    except ValueError:
+        return {"status": "error", "detail": "Resolver returned a non-JSON response."}
     except Exception as e:
         return {"status": "error", "detail": str(e)}
 
