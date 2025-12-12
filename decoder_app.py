@@ -1,29 +1,31 @@
 import streamlit as st
 import requests
-import json
 import time
 from typing import List, Literal, TypedDict, Union
 
 
-class Meta(TypedDict):
+class Meta(TypedDict, total=False):
     namespace: str
     type: str
-    coherence: float
+    coherence: Union[float, str]
     mediator: str
     timestamp: str
+    raw: dict
 
 
-class Content(TypedDict):
+class Content(TypedDict, total=False):
     summary: str
     claims: List[str]
     context: str
+    raw: dict
 
 
-class DecodeResultSuccess(TypedDict):
+class DecodeResultSuccess(TypedDict, total=False):
     status: Literal["success"]
     meta: Meta
     primes: List[int]
     content: Content
+    raw: dict
 
 
 class DecodeResultError(TypedDict):
@@ -104,6 +106,50 @@ def decode_coordinate(coord: str) -> DecodeResult:
             "detail": "You pasted the Prime Product (Math). Please paste the Coordinate (e.g. PL-Conv...)"
         }
 
+    def normalize_success(payload: dict) -> DecodeResultSuccess:
+        """
+        Normalize various resolver payload shapes into a consistent success object.
+        """
+        meta_source = payload.get("meta") or payload.get("metadata") or {}
+
+        normalized_meta: Meta = {
+            "namespace": payload.get("namespace")
+                or meta_source.get("namespace")
+                or coord.split(":")[0] if ":" in coord else coord,
+            "type": meta_source.get("type") or meta_source.get("kind") or payload.get("kind", "unknown"),
+            "coherence": meta_source.get("coherence")
+                or meta_source.get("score")
+                or meta_source.get("appraisal", {}).get("score", "N/A"),
+            "mediator": meta_source.get("mediator") or meta_source.get("provider") or payload.get("provider", "N/A"),
+            "timestamp": meta_source.get("timestamp")
+                or payload.get("created_at")
+                or meta_source.get("session_id", "N/A"),
+            "raw": meta_source or payload,
+        }
+
+        content_payload = payload.get("content") or {}
+        if not content_payload:
+            content_payload = {
+                "summary": payload.get("assistant_reply") or payload.get("full_text") or "No summary provided.",
+                "claims": payload.get("knowledge_tree") or [],
+                "context": payload.get("user_message") or payload.get("coordinate") or "",
+            }
+
+        normalized_content: Content = {
+            "summary": content_payload.get("summary", "No summary provided."),
+            "claims": content_payload.get("claims", []) or content_payload.get("knowledge_tree", []),
+            "context": content_payload.get("context", payload.get("coordinate", "")),
+            "raw": content_payload
+        }
+
+        return {
+            "status": "success",
+            "meta": normalized_meta,
+            "primes": payload.get("primes") or payload.get("token_primes") or [],
+            "content": normalized_content,
+            "raw": payload
+        }
+
     try:
         # 1. VISUALIZATION: Fake "Math" processing delay
         with st.status("Establishing Coherence Handshake...", expanded=True) as status:
@@ -124,21 +170,26 @@ def decode_coordinate(coord: str) -> DecodeResult:
             body = response.json()
             payload = body.get("data") or body.get("result") or body  # Handle nested payloads
 
+            # --- Known success envelope ---
             if response.ok and body.get("status") == "success":
                 status.update(label="Handshake Verified", state="complete")
-                meta = payload.get("meta")
-                content = payload.get("content")
+                return normalize_success(payload)
 
-                if not meta or not content:
-                    return {"status": "error", "detail": "Resolver returned an incomplete payload."}
+            # --- Explicit error envelope ---
+            if body.get("status") == "error":
+                detail = payload.get("detail") or payload.get("error") or response.text
+                status.update(label="Coherence Failed", state="error")
+                return {"status": "error", "detail": detail}
 
-                return {
-                    "status": "success",
-                    "meta": meta,
-                    "primes": payload.get("primes", []),
-                    "content": content
-                }
+            # --- Fallback: response is OK but shape is different (ledger record) ---
+            looks_like_record = any(
+                key in payload for key in ["coordinate", "metadata", "assistant_reply", "knowledge_tree", "token_primes"]
+            )
+            if response.ok and looks_like_record:
+                status.update(label="Handshake Verified", state="complete")
+                return normalize_success(payload)
 
+            # --- Unknown failure ---
             detail = payload.get("detail") or payload.get("error") or response.text
             status.update(label="Coherence Failed", state="error")
             return {"status": "error", "detail": detail}
@@ -157,34 +208,38 @@ if st.button("Resolve Coordinate", type="primary"):
     else:
         result: DecodeResult = decode_coordinate(coordinate)
         
-        if result["status"] == "success":
-            meta: Meta = result["meta"]
+        if result.get("status") == "success":
+            meta: Meta = result.get("meta") or {}
+            content: Content = result.get("content") or {}
             
             # METRICS ROW
             c1, c2, c3 = st.columns(3)
-            c1.metric("Coherence Norm", f"{meta['coherence']}")
-            c2.metric("Mediator Prime", meta['mediator'])
-            c3.metric("Type", meta['type'])
+            c1.metric("Coherence Norm", f"{meta.get('coherence', 'N/A')}")
+            c2.metric("Mediator Prime", meta.get('mediator', meta.get('namespace', 'N/A')))
+            c3.metric("Type", meta.get('type', 'N/A'))
             
             st.divider()
             
             # RECONSTRUCTED CONTENT
             st.subheader("Reconstructed Knowledge Tree")
             
-            content: Content = result["content"]
-            
             st.markdown(f"""
             <div class="success-box">
-                <b>Summary:</b> {content['summary']}
+                <b>Summary:</b> {content.get('summary', 'No summary provided.')}
             </div>
             """, unsafe_allow_html=True)
             
             st.markdown("#### Key Claims (Prime Nodes)")
-            for claim in content['claims']:
-                st.markdown(f"- 🗝️ *{claim}*")
-                
+            claims = content.get('claims') or []
+            if claims:
+                for claim in claims:
+                    st.markdown(f"- 🗝️ *{claim}*")
+            else:
+                st.caption("No discrete prime nodes returned; displaying raw payload below.")
+
             with st.expander("View Raw Ledger JSON"):
-                st.json(result)
+                st.json(result.get("raw") or result)
                 
         else:
-            st.error(f"Resolution Failed: {result['detail']}")
+            detail = result.get("detail", "Unknown error")
+            st.error(f"Resolution Failed: {detail}")
