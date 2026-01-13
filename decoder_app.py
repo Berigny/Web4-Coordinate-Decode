@@ -244,7 +244,13 @@ if st.button("Resolve Coordinate", type="primary"):
                 st.caption("No discrete prime nodes returned; displaying raw payload below.")
 
             walk_kind = raw_payload.get("kind") or meta.get("type")
-            walk_path = raw_payload.get("path") if isinstance(raw_payload, dict) else None
+            walk_path = None
+            if isinstance(raw_payload, dict):
+                walk_path = raw_payload.get("path")
+            if walk_path is None:
+                walk_path = (raw_payload.get("metadata") or {}).get("path") if isinstance(raw_payload, dict) else None
+            if walk_path is None:
+                walk_path = (raw_payload.get("meta") or {}).get("path") if isinstance(raw_payload, dict) else None
             if walk_kind == "coord_walk" and isinstance(walk_path, list):
                 st.divider()
                 st.subheader("Walk Inspection")
