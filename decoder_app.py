@@ -111,12 +111,14 @@ def decode_coordinate(coord: str) -> DecodeResult:
         Normalize various resolver payload shapes into a consistent success object.
         """
         meta_source = payload.get("meta") or payload.get("metadata") or {}
+        namespace_hint = payload.get("namespace_used") or payload.get("namespace")
+        canonical_coord = payload.get("canonical_coord") or payload.get("coordinate") or coord
 
         normalized_meta: Meta = {
-            "namespace": payload.get("namespace")
+            "namespace": namespace_hint
                 or meta_source.get("namespace")
                 or coord.split(":")[0] if ":" in coord else coord,
-            "type": meta_source.get("type") or meta_source.get("kind") or payload.get("kind", "unknown"),
+            "type": meta_source.get("type") or meta_source.get("kind") or payload.get("kind") or "unknown",
             "coherence": meta_source.get("coherence")
                 or meta_source.get("score")
                 or meta_source.get("appraisal", {}).get("score", "N/A"),
@@ -132,7 +134,7 @@ def decode_coordinate(coord: str) -> DecodeResult:
             content_payload = {
                 "summary": payload.get("assistant_reply") or payload.get("full_text") or "No summary provided.",
                 "claims": payload.get("knowledge_tree") or [],
-                "context": payload.get("user_message") or payload.get("coordinate") or "",
+                "context": payload.get("user_message") or canonical_coord,
             }
 
         normalized_content: Content = {
@@ -178,6 +180,9 @@ def decode_coordinate(coord: str) -> DecodeResult:
             # --- Explicit error envelope ---
             if body.get("status") == "error":
                 detail = payload.get("detail") or payload.get("error") or response.text
+                hint = payload.get("hint")
+                if hint:
+                    detail = f"{detail} ({hint})"
                 status.update(label="Coherence Failed", state="error")
                 return {"status": "error", "detail": detail}
 
@@ -211,6 +216,7 @@ if st.button("Resolve Coordinate", type="primary"):
         if result.get("status") == "success":
             meta: Meta = result.get("meta") or {}
             content: Content = result.get("content") or {}
+            raw_payload = result.get("raw") or {}
             
             # METRICS ROW
             c1, c2, c3 = st.columns(3)
@@ -236,6 +242,20 @@ if st.button("Resolve Coordinate", type="primary"):
                     st.markdown(f"- 🗝️ *{claim}*")
             else:
                 st.caption("No discrete prime nodes returned; displaying raw payload below.")
+
+            walk_kind = raw_payload.get("kind") or meta.get("type")
+            walk_path = raw_payload.get("path") if isinstance(raw_payload, dict) else None
+            if walk_kind == "coord_walk" and isinstance(walk_path, list):
+                st.divider()
+                st.subheader("Walk Inspection")
+                show_hop_numbers = st.checkbox("Show hop numbers", value=True)
+                for idx, coord in enumerate(walk_path):
+                    if not isinstance(coord, str):
+                        continue
+                    if show_hop_numbers:
+                        st.markdown(f"{idx}. `{coord}`")
+                    else:
+                        st.markdown(f"- `{coord}`")
 
             with st.expander("View Raw Ledger JSON"):
                 st.json(result.get("raw") or result)
