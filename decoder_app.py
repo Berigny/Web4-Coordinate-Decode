@@ -73,19 +73,45 @@ def normalize_success(payload: dict, coord_hint: str) -> DecodeResultSuccess:
         governance = payload.get("governance") or {}
         appraisal = governance.get("appraisal") if isinstance(governance, dict) else {}
         meta_payload = payload.get("meta") or {}
+
+        payload_text = ""
+        payload_blob = payload.get("payload")
+        if isinstance(payload_blob, dict):
+            blobs = payload_blob.get("blobs")
+            segments = payload_blob.get("segments")
+            if isinstance(blobs, dict) and isinstance(segments, list):
+                for segment in segments:
+                    if not isinstance(segment, dict):
+                        continue
+                    blob_ref = segment.get("blob_ref")
+                    if blob_ref and isinstance(blobs.get(blob_ref), str):
+                        payload_text = blobs[blob_ref].strip()
+                        break
+
+        claims = []
+        interpretation = payload.get("interpretation") or {}
+        if isinstance(interpretation, dict):
+            for claim in interpretation.get("claims") or []:
+                if isinstance(claim, dict):
+                    label = claim.get("label")
+                    if label:
+                        claims.append(str(label))
+                elif claim:
+                    claims.append(str(claim))
+
         normalized_meta: Meta = {
             "namespace": meta_payload.get("namespace_used")
                 or meta_payload.get("namespace")
                 or (coord_hint.split(":")[0] if ":" in coord_hint else coord_hint),
             "type": payload.get("type") or "unknown",
-            "coherence": appraisal.get("score") or appraisal.get("grace") or "N/A",
-            "mediator": appraisal.get("coherence") or meta_payload.get("provider") or "N/A",
+            "coherence": appraisal.get("coherence") or appraisal.get("score") or appraisal.get("grace") or "N/A",
+            "mediator": appraisal.get("law") or meta_payload.get("provider") or "N/A",
             "timestamp": meta_payload.get("created_at") or "N/A",
             "raw": payload,
         }
         normalized_content: Content = {
-            "summary": skim.get("one_line", "No summary provided."),
-            "claims": [],
+            "summary": skim.get("one_line") or payload_text or "No summary provided.",
+            "claims": claims,
             "context": payload.get("coord", ""),
             "raw": payload.get("payload") or {},
         }
@@ -164,7 +190,7 @@ def decode_coordinate(coord: str, silent: bool = False) -> DecodeResult:
         body = response.json()
         payload = body.get("data") or body.get("result") or body
 
-        if response.ok and (body.get("status") == "success" or "coordinate" in payload or "coord" in payload):
+        if response.ok and (body.get("status") == "success" or "coord" in payload or "canonical_coord" in payload):
             return normalize_success(payload, coord)
 
         detail = payload.get("detail") or payload.get("error") or response.text
@@ -247,6 +273,8 @@ with tab_walk:
         start_coord = st.text_input("Start Coordinate", placeholder="e.g. EV-882", key="walk_start")
     with c_hops:
         hop_count = st.number_input("Hops", min_value=1, max_value=10, value=5, key="walk_hops")
+    show_hop_numbers = st.checkbox("Show hop numbers on nodes", value=True, key="walk_show_hops")
+    show_walk_inspection = st.checkbox("Show walk inspection", value=True, key="walk_inspection")
 
     if st.button("Simulate Walk", type="primary", key="btn_walk"):
         if not start_coord:
@@ -256,7 +284,7 @@ with tab_walk:
                 walk_data: dict = {}
                 try:
                     walk_resp = requests.post(
-                        f"{API_BASE}/chat/coord/walk",
+                        f"{API_BASE}/api/chat/coord/walk",
                         json={
                             "start_coord": start_coord,
                             "max_steps": hop_count,
@@ -270,6 +298,9 @@ with tab_walk:
                     st.stop()
 
             path = walk_data.get("path") or walk_data.get("data", {}).get("path")
+            hop_lawfulness = walk_data.get("hop_lawfulness") or []
+            hop_scores = walk_data.get("hop_scores") or []
+            termination_reason = walk_data.get("termination_reason") or "unknown"
 
             if not path or not isinstance(path, list):
                 st.error("Backend returned no path. Walk simulation requires flow-rules output.")
@@ -310,10 +341,11 @@ with tab_walk:
                     node_label = f"{node_coord}\n[{short_text}]"
                     tooltip = summary
 
+                label_prefix = f"[{i}] " if show_hop_numbers else ""
                 if i == 0:
-                    dot.node(node_coord, label=node_label, fillcolor='#dbeafe', tooltip=tooltip)
+                    dot.node(node_coord, label=f"{label_prefix}{node_label}", fillcolor='#dbeafe', tooltip=tooltip)
                 else:
-                    dot.node(node_coord, label=node_label, tooltip=tooltip)
+                    dot.node(node_coord, label=f"{label_prefix}{node_label}", tooltip=tooltip)
 
                 if i > 0:
                     prev_node = path[i - 1]
@@ -327,3 +359,27 @@ with tab_walk:
                 time.sleep(0.7)
 
             status_placeholder.success("Traversal Complete. Knowledge Tree Anchored.")
+
+            if show_walk_inspection:
+                st.divider()
+                st.subheader("Walk Inspection")
+                inspection_rows = []
+                for idx, coord in enumerate(path):
+                    hop_score = None
+                    hop_law = None
+                    if idx > 0 and idx - 1 < len(hop_scores):
+                        hop_score = hop_scores[idx - 1].get("score") if isinstance(hop_scores[idx - 1], dict) else None
+                    if idx > 0 and idx - 1 < len(hop_lawfulness):
+                        hop_law = hop_lawfulness[idx - 1]
+                    inspection_rows.append(
+                        {
+                            "hop": idx,
+                            "coord": coord,
+                            "lawfulness": hop_law,
+                            "score": hop_score,
+                        }
+                    )
+                st.table(inspection_rows)
+                st.caption(f"Termination: {termination_reason}")
+                with st.expander("View Walk JSON"):
+                    st.json(walk_data)
