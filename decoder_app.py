@@ -224,6 +224,7 @@ with tab_walk:
             st.error("Start coordinate required.")
         else:
             with st.spinner("Calculating optimal traversal path..."):
+                walk_data: dict = {}
                 try:
                     walk_resp = requests.post(
                         f"{API_BASE}/chat/coord/walk",
@@ -242,11 +243,10 @@ with tab_walk:
             path = walk_data.get("path") or walk_data.get("data", {}).get("path")
 
             if not path or not isinstance(path, list):
-                st.warning("Backend returned no path. Simulating local traversal for demonstration.")
-                path = [start_coord] + [f"WX-Simulated-Node-{i}" for i in range(1, hop_count + 1)]
-            else:
-                if path[0] != start_coord:
-                    path.insert(0, start_coord)
+                st.error("Backend returned no path. Walk simulation requires flow-rules output.")
+                st.stop()
+            if path[0] != start_coord:
+                path.insert(0, start_coord)
 
             graph_placeholder = st.empty()
             status_placeholder = st.empty()
