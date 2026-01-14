@@ -68,6 +68,35 @@ st.title("DualSubstrate // Resolver")
 
 def normalize_success(payload: dict, coord_hint: str) -> DecodeResultSuccess:
     """Normalize backend payloads into a consistent shape."""
+    if "coord" in payload and "skim" in payload:
+        skim = payload.get("skim") or {}
+        governance = payload.get("governance") or {}
+        appraisal = governance.get("appraisal") if isinstance(governance, dict) else {}
+        meta_payload = payload.get("meta") or {}
+        normalized_meta: Meta = {
+            "namespace": meta_payload.get("namespace_used")
+                or meta_payload.get("namespace")
+                or (coord_hint.split(":")[0] if ":" in coord_hint else coord_hint),
+            "type": payload.get("type") or "unknown",
+            "coherence": appraisal.get("score") or appraisal.get("grace") or "N/A",
+            "mediator": appraisal.get("coherence") or meta_payload.get("provider") or "N/A",
+            "timestamp": meta_payload.get("created_at") or "N/A",
+            "raw": payload,
+        }
+        normalized_content: Content = {
+            "summary": skim.get("one_line", "No summary provided."),
+            "claims": [],
+            "context": payload.get("coord", ""),
+            "raw": payload.get("payload") or {},
+        }
+        return {
+            "status": "success",
+            "meta": normalized_meta,
+            "primes": [],
+            "content": normalized_content,
+            "raw": payload,
+        }
+
     meta_source = payload.get("meta") or payload.get("metadata") or {}
     namespace_hint = payload.get("namespace_used") or payload.get("namespace")
 
@@ -135,7 +164,7 @@ def decode_coordinate(coord: str, silent: bool = False) -> DecodeResult:
         body = response.json()
         payload = body.get("data") or body.get("result") or body
 
-        if response.ok and (body.get("status") == "success" or "coordinate" in payload):
+        if response.ok and (body.get("status") == "success" or "coordinate" in payload or "coord" in payload):
             return normalize_success(payload, coord)
 
         detail = payload.get("detail") or payload.get("error") or response.text
@@ -172,7 +201,7 @@ with tab_resolve:
         else:
             result = decode_coordinate(coordinate_input)
 
-            if result.get("status") == "success":
+            if result.get("status") == "success" or result.get("coord"):
                 meta = result.get("meta") or {}
                 content = result.get("content") or {}
 
