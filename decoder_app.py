@@ -228,9 +228,140 @@ def _resolve_walk_start(coord: str) -> tuple[str, str | None, str | None]:
         detail = decoded.get("detail") or decoded.get("error")
     return coord, None, detail or "Unable to resolve coordinate namespace."
 
+
+
+def _extract_walk_path(payload: dict) -> tuple[list[str] | None, list[dict] | None]:
+    raw = payload.get("raw") if isinstance(payload, dict) else None
+    if not isinstance(raw, dict):
+        return None, None
+
+    for key in ("path", "walk_path"):
+        value = raw.get(key)
+        if isinstance(value, list):
+            steps = raw.get("steps") if isinstance(raw.get("steps"), list) else None
+            return [str(item) for item in value if item], steps
+
+    for container_key in ("payload", "metadata", "meta", "content", "data"):
+        container = raw.get(container_key)
+        if isinstance(container, dict):
+            value = container.get("path") or container.get("walk_path")
+            if isinstance(value, list):
+                steps = container.get("steps") if isinstance(container.get("steps"), list) else None
+                return [str(item) for item in value if item], steps
+
+    return None, None
+
 # --- TABS LAYOUT ---
 
-tab_resolve, tab_walk = st.tabs(["Resolve COORD", "COORD Walk Simulator"])
+tab_resolve, tab_walk, tab_walk_history = st.tabs(["Resolve COORD", "COORD Walk Simulator", "Resolve Walk COORD"])
+
+
+
+# ==========================================
+# TAB 3: RESOLVE WALK COORD
+# ==========================================
+with tab_walk_history:
+    st.markdown("### Completed Walk Viewer")
+    st.markdown("""
+    Load a previously saved walk coordinate (e.g. `EV-WALK-*`) and render the path.
+    """)
+
+    c_walk, c_steps = st.columns([3, 1])
+    with c_walk:
+        walk_coord = st.text_input("Walk Coordinate", placeholder="e.g. EV-WALK-...", key="walk_coord")
+    with c_steps:
+        walk_limit = st.number_input("Max hops", min_value=1, max_value=25, value=12, key="walk_limit")
+    show_walk_numbers = st.checkbox("Show hop numbers on nodes", value=True, key="walk_history_show_hops")
+    show_walk_inspection = st.checkbox("Show walk inspection", value=True, key="walk_history_inspection")
+
+    if st.button("Load Walk", type="primary", key="btn_walk_history"):
+        if not walk_coord:
+            st.error("Walk coordinate required.")
+        else:
+            with st.spinner("Resolving walk coordinate..."):
+                walk_payload = decode_coordinate(walk_coord, silent=True)
+
+            if walk_payload.get("status") != "success":
+                st.error(f"Walk resolution failed: {walk_payload.get('detail')}")
+                st.stop()
+
+            path, steps = _extract_walk_path(walk_payload)
+            if not path:
+                st.error("No path found in walk payload.")
+                st.stop()
+
+            graph_placeholder = st.empty()
+            status_placeholder = st.empty()
+
+            dot = graphviz.Digraph(comment='Completed Walk')
+            dot.attr(rankdir='LR')
+            dot.attr('node', shape='box', style='filled', fillcolor='#f0fdf4', fontname='Courier New')
+
+            visited_edges = set()
+
+            for i, node_coord in enumerate(path[:walk_limit]):
+                status_placeholder.markdown(f"**Hop {i}:** Resolving `{node_coord}`...")
+
+                details = decode_coordinate(node_coord, silent=True)
+
+                node_label = node_coord
+                tooltip = "Unresolved"
+
+                if details.get("status") == "success":
+                    content = details.get("content", {})
+                    claims = content.get("claims", [])
+                    summary = content.get("summary", "")
+
+                    if claims:
+                        short_text = claims[0][:30] + "..." if len(claims[0]) > 30 else claims[0]
+                    else:
+                        short_text = summary[:30] + "..." if len(summary) > 30 else summary
+
+                    node_label = f"{node_coord}
+[{short_text}]"
+                    tooltip = summary
+
+                label_prefix = f"[{i}] " if show_walk_numbers else ""
+                if i == 0:
+                    dot.node(node_coord, label=f"{label_prefix}{node_label}", fillcolor='#dbeafe', tooltip=tooltip)
+                else:
+                    dot.node(node_coord, label=f"{label_prefix}{node_label}", tooltip=tooltip)
+
+                if i > 0:
+                    prev_node = path[i - 1]
+                    edge_key = f"{prev_node}-{node_coord}"
+                    if edge_key not in visited_edges:
+                        dot.edge(prev_node, node_coord, label=f"step {i}")
+                        visited_edges.add(edge_key)
+
+                graph_placeholder.graphviz_chart(dot)
+
+                time.sleep(0.5)
+
+            status_placeholder.success("Walk Loaded.")
+
+            if show_walk_inspection:
+                st.divider()
+                st.subheader("Walk Inspection")
+                inspection_rows = []
+                for idx, coord in enumerate(path[:walk_limit]):
+                    hop_score = None
+                    hop_law = None
+                    if steps and idx > 0 and idx - 1 < len(steps):
+                        step = steps[idx - 1] if isinstance(steps[idx - 1], dict) else {}
+                        hop_score = step.get("score")
+                        hop_law = step.get("lawfulness") or step.get("lawfulness_level")
+                    inspection_rows.append(
+                        {
+                            "hop": idx,
+                            "coord": coord,
+                            "lawfulness": hop_law,
+                            "score": hop_score,
+                        }
+                    )
+                st.table(inspection_rows)
+                with st.expander("View Walk JSON"):
+                    st.json(walk_payload.get("raw"))
 
 # ==========================================
 # TAB 1: RESOLVE COORD
