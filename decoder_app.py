@@ -230,7 +230,7 @@ def _resolve_walk_start(coord: str) -> tuple[str, str | None, str | None]:
 
 
 
-def _extract_walk_path(payload: dict) -> tuple[list[str] | None, list[dict] | None]:
+def _extract_walk_path(payload: DecodeResult | dict) -> tuple[list[str] | None, list[dict] | None]:
     raw = payload.get("raw") if isinstance(payload, dict) else None
     if not isinstance(raw, dict):
         return None, None
@@ -317,8 +317,7 @@ with tab_walk_history:
                     else:
                         short_text = summary[:30] + "..." if len(summary) > 30 else summary
 
-                    node_label = f"{node_coord}
-[{short_text}]"
+                    node_label = f"{node_coord}\n[{short_text}]"
                     tooltip = summary
 
                 label_prefix = f"[{i}] " if show_walk_numbers else ""
