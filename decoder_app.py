@@ -336,9 +336,8 @@ with tab_walk:
                     st.error(f"Backend handshake failed: {e}")
                     st.stop()
 
-            path = walk_data.get("path") or walk_data.get("data", {}).get("path")
-            hop_lawfulness = walk_data.get("hop_lawfulness") or []
-            hop_scores = walk_data.get("hop_scores") or []
+            steps = walk_data.get("steps", [])
+            path = walk_data.get("path", [])
             termination_reason = walk_data.get("termination_reason") or "unknown"
 
             if not path or not isinstance(path, list):
@@ -348,23 +347,52 @@ with tab_walk:
                 path.insert(0, resolved_start)
 
             graph_placeholder = st.empty()
+            chart_placeholder = st.empty()
             status_placeholder = st.empty()
 
             dot = graphviz.Digraph(comment='Knowledge Walk')
             dot.attr(rankdir='LR')
             dot.attr('node', shape='box', style='filled', fillcolor='#f0fdf4', fontname='Courier New')
 
-            visited_edges = set()
+            def _candidate_coord(candidate: object) -> str | None:
+                if isinstance(candidate, dict):
+                    return (
+                        candidate.get("coord")
+                        or candidate.get("coordinate")
+                        or candidate.get("node")
+                        or candidate.get("id")
+                    )
+                if isinstance(candidate, str):
+                    return candidate
+                return None
 
-            for i, node_coord in enumerate(path):
-                if i >= hop_count + 1:
+            def _candidate_score(candidate: object) -> float | None:
+                if isinstance(candidate, dict):
+                    score = candidate.get("score")
+                    if score is None:
+                        score = candidate.get("coherence")
+                    if isinstance(score, (int, float)):
+                        return float(score)
+                return None
+
+            visited_edges = set()
+            coherence_series: list[float] = []
+
+            for i, step in enumerate(steps):
+                if i >= hop_count:
                     break
 
-                status_placeholder.markdown(f"**Hop {i}:** Resolving `{node_coord}`...")
+                current_coord = path[i] if i < len(path) else step.get("from")
+                next_coord = path[i + 1] if i + 1 < len(path) else step.get("to")
 
-                details = decode_coordinate(node_coord, silent=True)
+                if not current_coord:
+                    continue
 
-                node_label = node_coord
+                status_placeholder.markdown(f"**Hop {i}:** Resolving `{current_coord}`...")
+
+                details = decode_coordinate(current_coord, silent=True)
+
+                node_label = current_coord
                 tooltip = "Unresolved"
 
                 if details.get("status") == "success":
@@ -377,21 +405,72 @@ with tab_walk:
                     else:
                         short_text = summary[:30] + "..." if len(summary) > 30 else summary
 
-                    node_label = f"{node_coord}\n[{short_text}]"
+                    node_label = f"{current_coord}\n[{short_text}]"
                     tooltip = summary
 
                 label_prefix = f"[{i}] " if show_hop_numbers else ""
                 if i == 0:
-                    dot.node(node_coord, label=f"{label_prefix}{node_label}", fillcolor='#dbeafe', tooltip=tooltip)
+                    dot.node(
+                        current_coord,
+                        label=f"{label_prefix}{node_label}",
+                        fillcolor='#dbeafe',
+                        color='#3b82f6',
+                        tooltip=tooltip
+                    )
                 else:
-                    dot.node(node_coord, label=f"{label_prefix}{node_label}", tooltip=tooltip)
+                    dot.node(current_coord, label=f"{label_prefix}{node_label}", tooltip=tooltip)
 
-                if i > 0:
-                    prev_node = path[i - 1]
-                    edge_key = f"{prev_node}-{node_coord}"
+                candidates = step.get("candidates", []) if isinstance(step, dict) else []
+                rejected_candidates: list[tuple[str, float | None]] = []
+                chosen_score = None
+
+                for candidate in candidates:
+                    cand_coord = _candidate_coord(candidate)
+                    if not cand_coord:
+                        continue
+                    cand_score = _candidate_score(candidate)
+                    if cand_coord == next_coord:
+                        chosen_score = cand_score
+                    else:
+                        rejected_candidates.append((cand_coord, cand_score))
+
+                if chosen_score is None and isinstance(step, dict):
+                    chosen_score = _candidate_score(step) or step.get("score") or step.get("coherence")
+
+                if next_coord:
+                    edge_key = f"{current_coord}-{next_coord}"
                     if edge_key not in visited_edges:
-                        dot.edge(prev_node, node_coord, label=f"step {i}")
+                        dot.edge(
+                            current_coord,
+                            next_coord,
+                            color="#16a34a",
+                            penwidth="2.5",
+                            label="chosen"
+                        )
                         visited_edges.add(edge_key)
+
+                rejected_sorted = sorted(
+                    rejected_candidates,
+                    key=lambda item: (item[1] is None, -(item[1] or 0))
+                )
+                for cand_coord, cand_score in rejected_sorted[:3]:
+                    dot.node(cand_coord, label=cand_coord)
+                    edge_key = f"{current_coord}-{cand_coord}"
+                    if edge_key not in visited_edges:
+                        edge_label = f"{cand_score:.3f}" if isinstance(cand_score, (int, float)) else "rejected"
+                        dot.edge(
+                            current_coord,
+                            cand_coord,
+                            style="dashed",
+                            color="#9ca3af",
+                            fontcolor="#6b7280",
+                            label=edge_label
+                        )
+                        visited_edges.add(edge_key)
+
+                if isinstance(chosen_score, (int, float)):
+                    coherence_series.append(float(chosen_score))
+                    chart_placeholder.line_chart(coherence_series)
 
                 graph_placeholder.graphviz_chart(dot)
 
@@ -402,23 +481,6 @@ with tab_walk:
             if show_walk_inspection:
                 st.divider()
                 st.subheader("Walk Inspection")
-                inspection_rows = []
-                for idx, coord in enumerate(path):
-                    hop_score = None
-                    hop_law = None
-                    if idx > 0 and idx - 1 < len(hop_scores):
-                        hop_score = hop_scores[idx - 1].get("score") if isinstance(hop_scores[idx - 1], dict) else None
-                    if idx > 0 and idx - 1 < len(hop_lawfulness):
-                        hop_law = hop_lawfulness[idx - 1]
-                    inspection_rows.append(
-                        {
-                            "hop": idx,
-                            "coord": coord,
-                            "lawfulness": hop_law,
-                            "score": hop_score,
-                        }
-                    )
-                st.table(inspection_rows)
                 st.caption(f"Termination: {termination_reason}")
-                with st.expander("View Walk JSON"):
+                with st.expander("Walk Inspection Data"):
                     st.json(walk_data)
