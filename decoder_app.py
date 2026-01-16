@@ -251,6 +251,68 @@ def _extract_walk_path(payload: DecodeResult | dict) -> tuple[list[str] | None, 
 
     return None, None
 
+
+
+def _walk_row_for_coord(index: int, coord: str) -> dict:
+    details = decode_coordinate(coord, silent=True)
+    raw = details.get("raw") if isinstance(details, dict) else {}
+    meta = details.get("meta") if isinstance(details, dict) else {}
+    content = details.get("content") if isinstance(details, dict) else {}
+
+    one_liner = None
+    if isinstance(raw, dict):
+        skim = raw.get("skim")
+        if isinstance(skim, dict):
+            one_liner = skim.get("one_line")
+    if not one_liner and isinstance(content, dict):
+        one_liner = content.get("summary")
+    if not one_liner and isinstance(raw, dict):
+        payload = raw.get("payload")
+        if isinstance(payload, dict):
+            blobs = payload.get("blobs")
+            segments = payload.get("segments")
+            if isinstance(blobs, dict) and isinstance(segments, list) and segments:
+                seg = segments[0]
+                if isinstance(seg, dict):
+                    blob_ref = seg.get("blob_ref")
+                    if isinstance(blob_ref, str) and isinstance(blobs.get(blob_ref), str):
+                        one_liner = blobs[blob_ref].strip()
+    if isinstance(one_liner, str):
+        one_liner = one_liner.replace("
+", " ").strip()
+    one_liner = one_liner or ""
+    if len(one_liner) > 140:
+        one_liner = one_liner[:137].rstrip() + "..."
+
+    created_at = ""
+    if isinstance(meta, dict):
+        created_at = meta.get("timestamp") or ""
+    if not created_at and isinstance(raw, dict):
+        meta_raw = raw.get("meta")
+        if isinstance(meta_raw, dict):
+            created_at = meta_raw.get("created_at") or ""
+
+    return {
+        "Number": index,
+        "COORD": coord,
+        "One-liner": one_liner,
+        "Created at": created_at or "",
+    }
+
+
+def _render_walk_table(path: list[str], *, title: str | None = None) -> None:
+    if title:
+        st.subheader(title)
+    rows = []
+    for idx, coord in enumerate(path, start=1):
+        if not isinstance(coord, str) or not coord:
+            continue
+        rows.append(_walk_row_for_coord(idx, coord))
+    if rows:
+        st.table(rows)
+    else:
+        st.caption("No walk rows to display.")
+
 # --- TABS LAYOUT ---
 
 tab_resolve, tab_walk, tab_walk_history = st.tabs(["Resolve COORD", "COORD Walk Simulator", "Resolve Walk COORD"])
