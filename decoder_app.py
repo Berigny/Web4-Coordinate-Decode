@@ -1,7 +1,7 @@
 import streamlit as st
 import requests
 import time
-import graphviz
+import graphviz  # type: ignore[import-not-found]
 from typing import List, Literal, TypedDict, Union
 
 # --- TYPES ---
@@ -72,6 +72,8 @@ def normalize_success(payload: dict, coord_hint: str) -> DecodeResultSuccess:
         skim = payload.get("skim") or {}
         governance = payload.get("governance") or {}
         appraisal = governance.get("appraisal") if isinstance(governance, dict) else {}
+        if not isinstance(appraisal, dict):
+            appraisal = {}
         meta_payload = payload.get("meta") or {}
 
         payload_text = ""
@@ -316,7 +318,7 @@ with tab_walk:
                 walk_data: dict = {}
                 try:
                     walk_resp = requests.post(
-                        f"{API_BASE}/api/chat/coord/walk",
+                        f"{API_BASE}/chat/coord/walk",
                         json={
                             "start_coord": resolved_start,
                             "max_steps": hop_count,
