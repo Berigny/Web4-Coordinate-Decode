@@ -278,8 +278,7 @@ def _walk_row_for_coord(index: int, coord: str) -> dict:
                     if isinstance(blob_ref, str) and isinstance(blobs.get(blob_ref), str):
                         one_liner = blobs[blob_ref].strip()
     if isinstance(one_liner, str):
-        one_liner = one_liner.replace("
-", " ").strip()
+        one_liner = one_liner.replace("\n", " ").strip()
     one_liner = one_liner or ""
     if len(one_liner) > 140:
         one_liner = one_liner[:137].rstrip() + "..."
