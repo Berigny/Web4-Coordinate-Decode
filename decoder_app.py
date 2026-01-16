@@ -199,6 +199,33 @@ def decode_coordinate(coord: str, silent: bool = False) -> DecodeResult:
     except Exception as e:
         return {"status": "error", "detail": str(e)}
 
+
+
+def _resolve_walk_start(coord: str) -> tuple[str, str | None, str | None]:
+    coord = (coord or "").strip()
+    if not coord:
+        return coord, None, "Start coordinate required."
+    if ":" in coord:
+        namespace = coord.split(":", 1)[0].strip() or None
+        return coord, namespace, None
+
+    decoded = decode_coordinate(coord, silent=True)
+    if isinstance(decoded, dict) and decoded.get("status") == "success":
+        raw = decoded.get("raw") or {}
+        canonical = raw.get("canonical_coord") or raw.get("coord") or raw.get("coordinate")
+        meta = decoded.get("meta") or {}
+        namespace = meta.get("namespace")
+        if isinstance(canonical, str) and canonical:
+            return canonical, namespace, None
+        if isinstance(namespace, str) and namespace:
+            return f"{namespace}:{coord}", namespace, None
+        return coord, None, None
+
+    detail = None
+    if isinstance(decoded, dict):
+        detail = decoded.get("detail") or decoded.get("error")
+    return coord, None, detail or "Unable to resolve coordinate namespace."
+
 # --- TABS LAYOUT ---
 
 tab_resolve, tab_walk = st.tabs(["Resolve COORD", "COORD Walk Simulator"])
@@ -280,19 +307,29 @@ with tab_walk:
         if not start_coord:
             st.error("Start coordinate required.")
         else:
+            resolved_start, namespace_hint, resolve_error = _resolve_walk_start(start_coord)
+            if resolve_error:
+                st.error(f"Start coordinate unresolved: {resolve_error}")
+                st.stop()
+
             with st.spinner("Calculating optimal traversal path..."):
                 walk_data: dict = {}
                 try:
                     walk_resp = requests.post(
                         f"{API_BASE}/api/chat/coord/walk",
                         json={
-                            "start_coord": start_coord,
+                            "start_coord": resolved_start,
                             "max_steps": hop_count,
-                            "current_coherence": 0.8
+                            "current_coherence": 0.8,
+                            "namespace": namespace_hint,
                         },
                         headers={"Content-Type": "application/json"}
                     )
                     walk_data = walk_resp.json()
+                    if (not walk_resp.ok) or walk_data.get("status") == "error":
+                        detail = walk_data.get("detail") or walk_data.get("error") or walk_resp.text
+                        st.error(f"Walk failed: {detail}")
+                        st.stop()
                 except Exception as e:
                     st.error(f"Backend handshake failed: {e}")
                     st.stop()
@@ -305,8 +342,8 @@ with tab_walk:
             if not path or not isinstance(path, list):
                 st.error("Backend returned no path. Walk simulation requires flow-rules output.")
                 st.stop()
-            if path[0] != start_coord:
-                path.insert(0, start_coord)
+            if path[0] != resolved_start:
+                path.insert(0, resolved_start)
 
             graph_placeholder = st.empty()
             status_placeholder = st.empty()
