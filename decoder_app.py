@@ -36,7 +36,38 @@ class DecodeResultError(TypedDict):
 DecodeResult = Union[DecodeResultSuccess, DecodeResultError]
 
 # --- CONFIGURATION ---
-API_BASE = "https://dualsubstrate-commercial.fly.dev"
+def _secret(name: str, default: str = "") -> str:
+    try:
+        value = st.secrets.get(name, default)
+    except Exception:
+        value = default
+    return str(value or default).strip()
+
+
+API_BASE_DEFAULT = _secret("API_BASE", "https://ds-backend-new.fly.dev")
+API_BASE_LOCAL_DEFAULT = _secret("API_BASE_LOCAL", "http://127.0.0.1:8080")
+ADMIN_TOKEN = _secret("BACKEND_ADMIN_TOKEN", "")
+FEEDBACK_ACTOR_ID = _secret("FEEDBACK_ACTOR_ID", "human:decoder")
+FEEDBACK_ACTOR_TYPE = _secret("FEEDBACK_ACTOR_TYPE", "human")
+
+api_target = st.sidebar.selectbox(
+    "API Target",
+    options=["Cloud", "Local", "Custom"],
+    index=0,
+)
+if api_target == "Cloud":
+    API_BASE = API_BASE_DEFAULT
+elif api_target == "Local":
+    API_BASE = API_BASE_LOCAL_DEFAULT
+else:
+    API_BASE = st.sidebar.text_input("Custom API Base", value=API_BASE_DEFAULT).strip() or API_BASE_DEFAULT
+
+
+def _auth_headers() -> dict:
+    headers = {"Content-Type": "application/json"}
+    if ADMIN_TOKEN:
+        headers["x-admin-token"] = ADMIN_TOKEN
+    return headers
 
 st.set_page_config(
     page_title="Web4 Universal Resolver",
@@ -169,23 +200,26 @@ def normalize_success(payload: dict, coord_hint: str) -> DecodeResultSuccess:
 def decode_coordinate(coord: str, silent: bool = False) -> DecodeResult:
     """Calls the backend to resolve the coordinate."""
     try:
+        def _call_decode(endpoint: str):
+            return requests.post(
+                f"{API_BASE}{endpoint}",
+                json={"coordinate": coord},
+                headers={"Content-Type": "application/json"},
+                timeout=20,
+            )
+
         if not silent:
             with st.status("Establishing Coherence Handshake...", expanded=True) as status:
                 st.write("078095 Parsing Namespace Prefix...")
                 st.write("07806e Verifying Ledger Integrity...")
-
-                response = requests.post(
-                    f"{API_BASE}/web4/decode",
-                    json={"coordinate": coord},
-                    headers={"Content-Type": "application/json"}
-                )
+                response = _call_decode("/web4/decode")
+                if not response.ok:
+                    response = _call_decode("/api/chat/web4/decode")
                 status.update(label="Handshake Verified", state="complete")
         else:
-            response = requests.post(
-                f"{API_BASE}/web4/decode",
-                json={"coordinate": coord},
-                headers={"Content-Type": "application/json"}
-            )
+            response = _call_decode("/web4/decode")
+            if not response.ok:
+                response = _call_decode("/api/chat/web4/decode")
 
         body = response.json()
         payload = body.get("data") or body.get("result") or body
@@ -198,6 +232,40 @@ def decode_coordinate(coord: str, silent: bool = False) -> DecodeResult:
 
     except Exception as e:
         return {"status": "error", "detail": str(e)}
+
+
+def submit_feedback(coord: str, rating: int, reason: str) -> dict:
+    payload = {
+        "actor_id": FEEDBACK_ACTOR_ID,
+        "actor_type": FEEDBACK_ACTOR_TYPE,
+        "rating": int(rating),
+        "reason": reason.strip() or "manual_rating",
+        "source": "decoder_app",
+    }
+    resp = requests.post(
+        f"{API_BASE}/ledger/feedback/{coord}",
+        json=payload,
+        headers=_auth_headers(),
+        timeout=20,
+    )
+    body = resp.json()
+    if not resp.ok:
+        detail = body.get("detail") if isinstance(body, dict) else None
+        raise RuntimeError(detail or resp.text)
+    return body
+
+
+def fetch_feedback(coord: str) -> dict:
+    resp = requests.get(
+        f"{API_BASE}/ledger/feedback/{coord}",
+        headers=_auth_headers(),
+        timeout=20,
+    )
+    body = resp.json()
+    if not resp.ok:
+        detail = body.get("detail") if isinstance(body, dict) else None
+        raise RuntimeError(detail or resp.text)
+    return body
 
 
 
@@ -432,6 +500,13 @@ with tab_resolve:
             if result.get("status") == "success" or result.get("coord"):
                 meta = result.get("meta") or {}
                 content = result.get("content") or {}
+                raw_payload = result.get("raw") or {}
+                resolved_coord = (
+                    raw_payload.get("canonical_coord")
+                    or raw_payload.get("coord")
+                    or raw_payload.get("coordinate")
+                    or coordinate_input.strip()
+                )
 
                 c1, c2, c3 = st.columns(3)
                 c1.metric("Coherence Norm", f"{meta.get('coherence', 'N/A')}")
@@ -457,6 +532,51 @@ with tab_resolve:
 
                 with st.expander("View Raw Ledger JSON"):
                     st.json(result.get("raw"))
+
+                st.divider()
+                st.subheader("Human Feedback")
+                st.caption(f"Coordinate: {resolved_coord}")
+
+                r1, r2, r3, r4 = st.columns(4)
+                with r1:
+                    reject = st.button("Reject (0)", key=f"fb_reject_{resolved_coord}")
+                with r2:
+                    weak = st.button("Weak (1)", key=f"fb_weak_{resolved_coord}")
+                with r3:
+                    good = st.button("Good (2)", key=f"fb_good_{resolved_coord}")
+                with r4:
+                    approve = st.button("Approve (3)", key=f"fb_approve_{resolved_coord}")
+
+                reason = st.text_input(
+                    "Feedback reason",
+                    value="investor_demo_review",
+                    key=f"fb_reason_{resolved_coord}",
+                )
+
+                chosen_rating = None
+                if reject:
+                    chosen_rating = 0
+                elif weak:
+                    chosen_rating = 1
+                elif good:
+                    chosen_rating = 2
+                elif approve:
+                    chosen_rating = 3
+
+                if chosen_rating is not None:
+                    try:
+                        feedback_result = submit_feedback(resolved_coord, chosen_rating, reason)
+                        st.success(f"Feedback submitted: rating={chosen_rating}")
+                        st.json(feedback_result)
+                    except Exception as err:
+                        st.error(f"Feedback submit failed: {err}")
+
+                if st.button("Refresh feedback rollup", key=f"fb_refresh_{resolved_coord}"):
+                    try:
+                        feedback_state = fetch_feedback(resolved_coord)
+                        st.json(feedback_state)
+                    except Exception as err:
+                        st.error(f"Feedback fetch failed: {err}")
             else:
                 st.error(f"Resolution Failed: {result.get('detail')}")
 
