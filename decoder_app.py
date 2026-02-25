@@ -323,15 +323,7 @@ def _main_content_text(result: dict) -> str:
     content = result.get("content") or {}
     raw = result.get("raw") or {}
 
-    direct = content.get("summary")
-    if isinstance(direct, str) and direct.strip():
-        return direct.strip()
-
-    for key in ("assistant_reply", "content", "full_text", "text"):
-        value = raw.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-
+    # Prefer canonical payload blobs (e.g., BLOB:WX:ANS-01) over skim/summary.
     payload = raw.get("payload")
     if isinstance(payload, dict):
         blobs = payload.get("blobs")
@@ -345,6 +337,15 @@ def _main_content_text(result: dict) -> str:
                     blob_text = blobs.get(blob_ref)
                     if isinstance(blob_text, str) and blob_text.strip():
                         return blob_text.strip()
+
+    for key in ("assistant_reply", "content", "full_text", "text"):
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    direct = content.get("summary")
+    if isinstance(direct, str) and direct.strip():
+        return direct.strip()
 
     return "No main content available."
 
