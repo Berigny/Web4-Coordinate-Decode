@@ -319,6 +319,73 @@ def _extract_coords_from_text(text: str) -> list[str]:
     return coords
 
 
+def _main_content_text(result: dict) -> str:
+    content = result.get("content") or {}
+    raw = result.get("raw") or {}
+
+    direct = content.get("summary")
+    if isinstance(direct, str) and direct.strip():
+        return direct.strip()
+
+    for key in ("assistant_reply", "content", "full_text", "text"):
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    payload = raw.get("payload")
+    if isinstance(payload, dict):
+        blobs = payload.get("blobs")
+        segments = payload.get("segments")
+        if isinstance(blobs, dict) and isinstance(segments, list):
+            for segment in segments:
+                if not isinstance(segment, dict):
+                    continue
+                blob_ref = segment.get("blob_ref")
+                if isinstance(blob_ref, str):
+                    blob_text = blobs.get(blob_ref)
+                    if isinstance(blob_text, str) and blob_text.strip():
+                        return blob_text.strip()
+
+    return "No main content available."
+
+
+def _collect_referenced_coords(result: dict, resolved_coord: str) -> list[str]:
+    candidate_blocks: list[str] = []
+    raw = result.get("raw") or {}
+    content = result.get("content") or {}
+
+    try:
+        import json
+
+        candidate_blocks.append(json.dumps(raw, ensure_ascii=False))
+        candidate_blocks.append(json.dumps(content, ensure_ascii=False))
+    except Exception:
+        pass
+
+    if isinstance(content.get("context"), str):
+        candidate_blocks.append(content.get("context") or "")
+    if isinstance(content.get("summary"), str):
+        candidate_blocks.append(content.get("summary") or "")
+
+    seen = set()
+    refs: list[str] = []
+    for block in candidate_blocks:
+        for coord in _extract_coords_from_text(block):
+            if coord == resolved_coord:
+                continue
+            if coord in seen:
+                continue
+            seen.add(coord)
+            refs.append(coord)
+    return refs
+
+
+def _queue_resolve_coordinate(coord: str) -> None:
+    st.session_state["coordinate_input"] = coord
+    st.session_state["pending_resolve_coord"] = coord
+
+
+
 def _extract_walk_path(payload: DecodeResult | dict) -> tuple[list[str] | None, list[dict] | None]:
     raw = payload.get("raw") if isinstance(payload, dict) else None
     if not isinstance(raw, dict):
@@ -501,14 +568,20 @@ with tab_resolve:
         key="coordinate_input",
     )
 
-    if st.button("Resolve Coordinate", type="primary", key="btn_resolve"):
-        if not coordinate_input:
+    resolve_clicked = st.button("Resolve Coordinate", type="primary", key="btn_resolve")
+    queued_coord = (st.session_state.get("pending_resolve_coord") or "").strip()
+    should_resolve = resolve_clicked or bool(queued_coord)
+
+    if should_resolve:
+        target_coord = (queued_coord or coordinate_input or "").strip()
+        st.session_state["pending_resolve_coord"] = ""
+        if not target_coord:
             st.error("Please enter a coordinate.")
         else:
-            result = decode_coordinate(coordinate_input)
+            result = decode_coordinate(target_coord)
             if result.get("status") == "success" or result.get("coord"):
                 st.session_state["last_resolve_result"] = result
-                st.session_state["last_resolve_input"] = coordinate_input.strip()
+                st.session_state["last_resolve_input"] = target_coord
             else:
                 st.error(f"Resolution Failed: {result.get('detail')}")
 
@@ -539,13 +612,27 @@ with tab_resolve:
         </div>
         """, unsafe_allow_html=True)
 
-        st.markdown("#### Key Claims (Prime Nodes)")
-        claims = content.get('claims') or []
-        if claims:
-            for claim in claims:
-                st.markdown(f"- 078078 *{claim}*")
+        st.markdown("#### Content")
+        st.markdown(_main_content_text(result))
+
+        referenced_coords = _collect_referenced_coords(result, str(resolved_coord or ""))
+        st.markdown("#### Referenced COORDs")
+        if referenced_coords:
+            per_row = 3
+            for row_start in range(0, len(referenced_coords), per_row):
+                row = referenced_coords[row_start: row_start + per_row]
+                cols = st.columns(len(row))
+                for idx, coord in enumerate(row):
+                    label = coord if len(coord) <= 32 else f"{coord[:29]}..."
+                    cols[idx].button(
+                        label,
+                        key=f"ref_coord_btn_{resolved_coord}_{row_start}_{idx}",
+                        help=coord,
+                        on_click=_queue_resolve_coordinate,
+                        args=(coord,),
+                    )
         else:
-            st.caption("No discrete prime nodes returned.")
+            st.caption("No referenced COORDs found.")
 
         with st.expander("View Raw Ledger JSON"):
             st.json(result.get("raw"))
