@@ -488,7 +488,8 @@ with tab_resolve:
     coordinate_input = st.text_input(
         "Enter Web4 Coordinate",
         placeholder="e.g. EV-Demo-Session-123",
-        help="Paste a Coordinate ID (EV, WX, ATT, etc)."
+        help="Paste a Coordinate ID (EV, WX, ATT, etc).",
+        key="coordinate_input",
     )
 
     if st.button("Resolve Coordinate", type="primary", key="btn_resolve"):
@@ -496,89 +497,101 @@ with tab_resolve:
             st.error("Please enter a coordinate.")
         else:
             result = decode_coordinate(coordinate_input)
-
             if result.get("status") == "success" or result.get("coord"):
-                meta = result.get("meta") or {}
-                content = result.get("content") or {}
-                raw_payload = result.get("raw") or {}
-                resolved_coord = (
-                    raw_payload.get("canonical_coord")
-                    or raw_payload.get("coord")
-                    or raw_payload.get("coordinate")
-                    or coordinate_input.strip()
-                )
-
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Coherence Norm", f"{meta.get('coherence', 'N/A')}")
-                c2.metric("Mediator Prime", meta.get('mediator', 'N/A'))
-                c3.metric("Type", meta.get('type', 'N/A'))
-
-                st.divider()
-
-                st.subheader("Reconstructed Knowledge Tree")
-                st.markdown(f"""
-                <div class="success-box">
-                    <b>Summary:</b> {content.get('summary', 'No summary provided.')}
-                </div>
-                """, unsafe_allow_html=True)
-
-                st.markdown("#### Key Claims (Prime Nodes)")
-                claims = content.get('claims') or []
-                if claims:
-                    for claim in claims:
-                        st.markdown(f"- 078078 *{claim}*")
-                else:
-                    st.caption("No discrete prime nodes returned.")
-
-                with st.expander("View Raw Ledger JSON"):
-                    st.json(result.get("raw"))
-
-                st.divider()
-                st.subheader("Human Feedback")
-                st.caption(f"Coordinate: {resolved_coord}")
-
-                r1, r2, r3, r4 = st.columns(4)
-                with r1:
-                    reject = st.button("Reject (0)", key=f"fb_reject_{resolved_coord}")
-                with r2:
-                    weak = st.button("Weak (1)", key=f"fb_weak_{resolved_coord}")
-                with r3:
-                    good = st.button("Good (2)", key=f"fb_good_{resolved_coord}")
-                with r4:
-                    approve = st.button("Approve (3)", key=f"fb_approve_{resolved_coord}")
-
-                reason = st.text_input(
-                    "Feedback reason",
-                    value="investor_demo_review",
-                    key=f"fb_reason_{resolved_coord}",
-                )
-
-                chosen_rating = None
-                if reject:
-                    chosen_rating = 0
-                elif weak:
-                    chosen_rating = 1
-                elif good:
-                    chosen_rating = 2
-                elif approve:
-                    chosen_rating = 3
-
-                if chosen_rating is not None:
-                    try:
-                        feedback_result = submit_feedback(resolved_coord, chosen_rating, reason)
-                        st.success(f"Feedback submitted: rating={chosen_rating}")
-                        st.json(feedback_result)
-                    except Exception as err:
-                        st.error(f"Feedback submit failed: {err}")
-
-                if st.button("Refresh feedback rollup", key=f"fb_refresh_{resolved_coord}"):
-                    try:
-                        feedback_state = fetch_feedback(resolved_coord)
-                        st.json(feedback_state)
-                    except Exception as err:
-                        st.error(f"Feedback fetch failed: {err}")
+                st.session_state["last_resolve_result"] = result
+                st.session_state["last_resolve_input"] = coordinate_input.strip()
             else:
                 st.error(f"Resolution Failed: {result.get('detail')}")
+
+    result = st.session_state.get("last_resolve_result")
+    last_input = st.session_state.get("last_resolve_input", "").strip()
+    if isinstance(result, dict) and (result.get("status") == "success" or result.get("coord")):
+        meta = result.get("meta") or {}
+        content = result.get("content") or {}
+        raw_payload = result.get("raw") or {}
+        resolved_coord = (
+            raw_payload.get("canonical_coord")
+            or raw_payload.get("coord")
+            or raw_payload.get("coordinate")
+            or last_input
+        )
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Coherence Norm", f"{meta.get('coherence', 'N/A')}")
+        c2.metric("Mediator Prime", meta.get('mediator', 'N/A'))
+        c3.metric("Type", meta.get('type', 'N/A'))
+
+        st.divider()
+
+        st.subheader("Reconstructed Knowledge Tree")
+        st.markdown(f"""
+        <div class="success-box">
+            <b>Summary:</b> {content.get('summary', 'No summary provided.')}
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown("#### Key Claims (Prime Nodes)")
+        claims = content.get('claims') or []
+        if claims:
+            for claim in claims:
+                st.markdown(f"- 078078 *{claim}*")
+        else:
+            st.caption("No discrete prime nodes returned.")
+
+        with st.expander("View Raw Ledger JSON"):
+            st.json(result.get("raw"))
+
+        st.divider()
+        st.subheader("Human Feedback")
+        st.caption(f"Coordinate: {resolved_coord}")
+
+        rating_choice = st.radio(
+            "Rating",
+            options=["Reject (0)", "Weak (1)", "Good (2)", "Approve (3)"],
+            index=3,
+            horizontal=True,
+            key=f"fb_rating_choice_{resolved_coord}",
+        )
+
+        reason = st.text_input(
+            "Feedback reason",
+            value="investor_demo_review",
+            key=f"fb_reason_{resolved_coord}",
+        )
+
+        if st.button("Submit rating", key=f"fb_submit_{resolved_coord}", type="primary"):
+            rating_map = {
+                "Reject (0)": 0,
+                "Weak (1)": 1,
+                "Good (2)": 2,
+                "Approve (3)": 3,
+            }
+            chosen_rating = int(rating_map.get(rating_choice, 3))
+            try:
+                feedback_result = submit_feedback(resolved_coord, chosen_rating, reason)
+                st.success(f"Feedback submitted: rating={chosen_rating}")
+                st.json(feedback_result)
+                # Re-resolve immediately so refreshed meta (including feedback rollup) is visible.
+                refreshed = decode_coordinate(resolved_coord, silent=True)
+                if isinstance(refreshed, dict) and (refreshed.get("status") == "success" or refreshed.get("coord")):
+                    st.session_state["last_resolve_result"] = refreshed
+                    st.session_state["last_resolve_input"] = resolved_coord
+                    st.session_state["coordinate_input"] = resolved_coord
+                    st.info("Coordinate re-resolved after rating submission.")
+                try:
+                    feedback_state = fetch_feedback(resolved_coord)
+                    st.json(feedback_state)
+                except Exception as refresh_err:
+                    st.warning(f"Rating saved, but feedback refresh failed: {refresh_err}")
+            except Exception as err:
+                st.error(f"Feedback submit failed: {err}")
+
+        if st.button("Refresh feedback rollup", key=f"fb_refresh_{resolved_coord}"):
+            try:
+                feedback_state = fetch_feedback(resolved_coord)
+                st.json(feedback_state)
+            except Exception as err:
+                st.error(f"Feedback fetch failed: {err}")
 
 # ==========================================
 # TAB 2: COORD WALK SIMULATOR
