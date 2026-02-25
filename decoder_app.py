@@ -49,6 +49,9 @@ API_BASE_LOCAL_DEFAULT = _secret("API_BASE_LOCAL", "http://127.0.0.1:8080")
 ADMIN_TOKEN = _secret("BACKEND_ADMIN_TOKEN", "")
 FEEDBACK_ACTOR_ID = _secret("FEEDBACK_ACTOR_ID", "human:decoder")
 FEEDBACK_ACTOR_TYPE = _secret("FEEDBACK_ACTOR_TYPE", "human")
+PRINCIPAL_ID = _secret("PRINCIPAL_ID", "demo-user")
+PRINCIPAL_TYPE = _secret("PRINCIPAL_TYPE", "human")
+TENANT_ID = _secret("TENANT_ID", "demo")
 
 api_target = st.sidebar.selectbox(
     "API Target",
@@ -67,6 +70,12 @@ def _auth_headers() -> dict:
     headers = {"Content-Type": "application/json"}
     if ADMIN_TOKEN:
         headers["x-admin-token"] = ADMIN_TOKEN
+    if PRINCIPAL_ID:
+        headers["x-principal-id"] = PRINCIPAL_ID
+    if PRINCIPAL_TYPE:
+        headers["x-principal-type"] = PRINCIPAL_TYPE
+    if TENANT_ID:
+        headers["x-tenant-id"] = TENANT_ID
     return headers
 
 st.set_page_config(
@@ -576,7 +585,6 @@ with tab_resolve:
                 if isinstance(refreshed, dict) and (refreshed.get("status") == "success" or refreshed.get("coord")):
                     st.session_state["last_resolve_result"] = refreshed
                     st.session_state["last_resolve_input"] = resolved_coord
-                    st.session_state["coordinate_input"] = resolved_coord
                     st.info("Coordinate re-resolved after rating submission.")
                 try:
                     feedback_state = fetch_feedback(resolved_coord)
