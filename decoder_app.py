@@ -523,6 +523,7 @@ with tab_walk_history:
             if not path:
                 st.error("No path found in walk payload.")
                 st.stop()
+            assert path is not None
 
             limited_path = path[:walk_limit]
             _render_walk_table(limited_path, title="Walk Path")
