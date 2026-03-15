@@ -49,6 +49,8 @@ API_BASE_LOCAL_DEFAULT = _secret("API_BASE_LOCAL", "http://127.0.0.1:8080")
 ADMIN_TOKEN = _secret("BACKEND_ADMIN_TOKEN", "")
 FEEDBACK_ACTOR_ID = _secret("FEEDBACK_ACTOR_ID", "human:decoder")
 FEEDBACK_ACTOR_TYPE = _secret("FEEDBACK_ACTOR_TYPE", "human")
+VERIFIER_PORTAL_ID = _secret("VERIFIER_PORTAL_ID", "web4_decoder_app")
+VERIFIER_IDENTITY = _secret("VERIFIER_IDENTITY", FEEDBACK_ACTOR_ID or "human:decoder")
 PRINCIPAL_ID = _secret("PRINCIPAL_ID", "demo-user")
 PRINCIPAL_TYPE = _secret("PRINCIPAL_TYPE", "human")
 TENANT_ID = _secret("TENANT_ID", "demo")
@@ -243,13 +245,24 @@ def decode_coordinate(coord: str, silent: bool = False) -> DecodeResult:
         return {"status": "error", "detail": str(e)}
 
 
-def submit_feedback(coord: str, rating: int, reason: str) -> dict:
+def submit_feedback(
+    coord: str,
+    rating: int,
+    reason: str,
+    *,
+    verification_signature_ref: str = "",
+    verification_proof_ref: str = "",
+) -> dict:
     payload = {
         "actor_id": FEEDBACK_ACTOR_ID,
         "actor_type": FEEDBACK_ACTOR_TYPE,
         "rating": int(rating),
         "reason": reason.strip() or "manual_rating",
         "source": "decoder_app",
+        "verifier_portal": VERIFIER_PORTAL_ID,
+        "verifier_identity": VERIFIER_IDENTITY,
+        "verification_signature_ref": verification_signature_ref.strip() or None,
+        "verification_proof_ref": verification_proof_ref.strip() or None,
     }
     resp = requests.post(
         f"{API_BASE}/ledger/feedback/{coord}",
@@ -656,6 +669,16 @@ with tab_resolve:
             value="investor_demo_review",
             key=f"fb_reason_{resolved_coord}",
         )
+        signature_ref = st.text_input(
+            "Verification signature ref",
+            value="",
+            key=f"fb_sig_{resolved_coord}",
+        )
+        proof_ref = st.text_input(
+            "Verification proof ref",
+            value="",
+            key=f"fb_proof_{resolved_coord}",
+        )
 
         if st.button("Submit rating", key=f"fb_submit_{resolved_coord}", type="primary"):
             rating_map = {
@@ -666,7 +689,13 @@ with tab_resolve:
             }
             chosen_rating = int(rating_map.get(rating_choice, 3))
             try:
-                feedback_result = submit_feedback(resolved_coord, chosen_rating, reason)
+                feedback_result = submit_feedback(
+                    resolved_coord,
+                    chosen_rating,
+                    reason,
+                    verification_signature_ref=signature_ref,
+                    verification_proof_ref=proof_ref,
+                )
                 st.success(f"Feedback submitted: rating={chosen_rating}")
                 st.json(feedback_result)
                 # Re-resolve immediately so refreshed meta (including feedback rollup) is visible.
