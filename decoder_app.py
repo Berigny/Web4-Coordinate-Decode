@@ -107,6 +107,36 @@ st.title("DualSubstrate // Resolver")
 
 # --- HELPER FUNCTIONS ---
 
+
+def _query_param_text(name: str) -> str:
+    try:
+        value = st.query_params.get(name, "")
+    except Exception:
+        value = ""
+    if isinstance(value, list):
+        return str(value[0] or "").strip() if value else ""
+    return str(value or "").strip()
+
+
+def _query_param_list(name: str) -> list[str]:
+    raw = _query_param_text(name)
+    if not raw:
+        return []
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _benchmark_exemplar_context() -> dict:
+    return {
+        "run_id": _query_param_text("benchmark_run_id"),
+        "mode": _query_param_text("benchmark_mode"),
+        "query": _query_param_text("benchmark_query"),
+        "coord": _query_param_text("benchmark_coord"),
+        "retrieved_coords": _query_param_list("benchmark_retrieved_coords"),
+        "walk_path": _query_param_list("benchmark_walk_path"),
+        "walk_coord": _query_param_text("benchmark_walk_coord"),
+        "outcome": _query_param_text("benchmark_outcome"),
+    }
+
 def normalize_success(payload: dict, coord_hint: str) -> DecodeResultSuccess:
     """Normalize backend payloads into a consistent shape."""
     if "coord" in payload and "skim" in payload:
@@ -499,6 +529,60 @@ def _render_walk_table(path: list[str], *, title: str | None = None) -> None:
     else:
         st.caption("No walk rows to display.")
 
+
+def _render_benchmark_exemplar_panel() -> None:
+    exemplar = _benchmark_exemplar_context()
+    if not any(exemplar.values()):
+        return
+
+    st.markdown("### Benchmark Exemplar Proof")
+    st.caption("This panel was opened from the Control Plane benchmark surface and preserves run attribution while resolving the exemplar in the decoder.")
+
+    if exemplar["run_id"]:
+        st.markdown(f"**Originating run:** `{exemplar['run_id']}`")
+    if exemplar["mode"]:
+        st.markdown(f"**Mode:** `{exemplar['mode']}`")
+    if exemplar["query"]:
+        st.markdown(f"**Benchmark query:** {exemplar['query']}")
+
+    exemplar_coord = exemplar["coord"]
+    if exemplar_coord:
+        st.markdown(f"**Target coordinate:** `{exemplar_coord}`")
+    else:
+        st.warning("No exemplar coordinate was supplied. This benchmark proof link is incomplete.")
+
+    retrieved_coords = exemplar["retrieved_coords"]
+    if retrieved_coords:
+        st.markdown("**Retrieved coordinates**")
+        st.code("\n".join(retrieved_coords))
+    else:
+        st.info("No retrieved-coordinate list was supplied with this exemplar.")
+
+    walk_path = exemplar["walk_path"]
+    if walk_path:
+        _render_walk_table(walk_path, title="Published Walk Path")
+    elif exemplar["walk_coord"]:
+        st.markdown(f"**Walk coordinate:** `{exemplar['walk_coord']}`")
+    else:
+        st.info("No walk path was supplied with this exemplar.")
+
+    if exemplar_coord:
+        result = decode_coordinate(exemplar_coord, silent=True)
+        if result.get("status") == "success":
+            st.success(f"Replay/resolve outcome: {exemplar.get('outcome') or 'resolved'}")
+            with st.expander("Resolved exemplar payload"):
+                st.json(result.get("raw"))
+            if "pending_resolve_coord" not in st.session_state:
+                st.session_state["pending_resolve_coord"] = ""
+            if st.button("Load exemplar into resolver", key=f"load_benchmark_exemplar_{exemplar_coord}"):
+                _queue_resolve_coordinate(exemplar_coord)
+        else:
+            st.error(
+                f"Replay/resolve outcome: {exemplar.get('outcome') or 'failed'}"
+            )
+            st.caption(str(result.get("detail") or "Decoder could not resolve the exemplar coordinate."))
+    st.divider()
+
 # --- TABS LAYOUT ---
 
 tab_resolve, tab_walk, tab_walk_history = st.tabs(["Resolve COORD", "COORD Walk Simulator", "Resolve Walk COORD"])
@@ -573,6 +657,8 @@ with tab_resolve:
     This tool demonstrates **Protocol Independence**. 
     By inputting a Web4 Coordinate, any system with Ledger access can reconstruct the knowledge tree without a central platform.
     """)
+
+    _render_benchmark_exemplar_panel()
 
     st.divider()
 
