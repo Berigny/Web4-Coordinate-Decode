@@ -44,8 +44,8 @@ def _secret(name: str, default: str = "") -> str:
     return str(value or default).strip()
 
 
-API_BASE_DEFAULT = _secret("API_BASE", "https://ds-backend-new.fly.dev")
-API_BASE_LOCAL_DEFAULT = _secret("API_BASE_LOCAL", "http://127.0.0.1:8080")
+API_BASE_DEFAULT = _secret("API_BASE", "")
+API_BASE_LOCAL_DEFAULT = _secret("API_BASE_LOCAL", "")
 ADMIN_TOKEN = _secret("BACKEND_ADMIN_TOKEN", "")
 FEEDBACK_ACTOR_ID = _secret("FEEDBACK_ACTOR_ID", "human:decoder")
 FEEDBACK_ACTOR_TYPE = _secret("FEEDBACK_ACTOR_TYPE", "human")
